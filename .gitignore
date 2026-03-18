@@ -1,1 +1,8 @@
 .DS_Store
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+emsjb.db
+outputs/
+.vscode/

@@ -22,13 +22,11 @@ def optimize_battery(dam_prices, rtm_prices, soc_current):
 
     model += (
         pulp.lpSum(profit_s[s] for s in range(SCENARIOS)) / SCENARIOS
-        - LAMBDA * (eta + pulp.lpSum(xi[s] for s in range(SCENARIOS))
-                    / ((1 - ALPHA) * SCENARIOS))
     )
 
     for t in range(HORIZON):
         prev_soc = soc[t-1] if t > 0 else soc_current
-        model += soc[t] == prev_soc + ETA * q[t] - q[t] / ETA
+        model += soc[t] == prev_soc + ETA * q_neg[t] - q_pos[t] / ETA
         model += q[t] == q_pos[t] - q_neg[t]
 
     for s in range(SCENARIOS):
@@ -38,8 +36,9 @@ def optimize_battery(dam_prices, rtm_prices, soc_current):
             - DEGR_COST * (q_pos[t] + q_neg[t])
             for t in range(HORIZON)
         )
-        model += xi[s] >= eta - profit_s[s]
 
-    model.solve(pulp.PULP_CBC_CMD(msg=False))
+    status = model.solve(pulp.PULP_CBC_CMD(msg=False))
+    if status != pulp.LpStatusOptimal:
+        print(f"Solver Status: {pulp.LpStatus[status]}")
 
     return pulp.value(q[0])
