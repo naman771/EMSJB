@@ -8,9 +8,13 @@ from datetime import datetime
 class SimulationStepBase(BaseModel):
     step_index: int
     price: float
+    forecast_price: float = 0.0
     battery_power: float
     soc: float
     profit: float
+    energy_revenue: float = 0.0
+    degradation_cost: float = 0.0
+    deviation_penalty: float = 0.0
 
 
 class SimulationStepCreate(SimulationStepBase):
@@ -27,6 +31,7 @@ class SimulationStep(SimulationStepBase):
 
 class SimulationRunBase(BaseModel):
     total_profit: float
+    steps_count: int = 0
 
 
 class SimulationRunCreate(SimulationRunBase):
@@ -60,6 +65,18 @@ class ConfigResponse(BaseModel):
     cvar_lambda: float
 
 
+class ConfigUpdate(BaseModel):
+    """Schema for updating simulation configuration via POST."""
+    battery_power_kw: Optional[float] = None
+    battery_energy_kwh: Optional[float] = None
+    round_trip_efficiency: Optional[float] = None
+    cycle_life: Optional[int] = None
+    cvar_alpha: Optional[float] = None
+    cvar_lambda: Optional[float] = None
+    planning_horizon_hours: Optional[int] = None
+    scenarios: Optional[int] = None
+
+
 # ── Data Summary ────────────────────────────────────────────
 
 class DataSummary(BaseModel):
@@ -82,6 +99,13 @@ class MetricsResponse(BaseModel):
     max_drawdown: float
     sharpe_ratio: float
     utilization_rate: float
+    payback_years: float = 0.0
+    roi_annual_pct: float = 0.0
+    total_energy_revenue: float = 0.0
+    total_degradation_cost: float = 0.0
+    total_deviation_penalty: float = 0.0
+    forecast_mae: float = 0.0
+    forecast_rmse: float = 0.0
 
 
 # ── Baseline Comparison ─────────────────────────────────────
@@ -98,3 +122,11 @@ class BaselineComparison(BaseModel):
     optimized: BaselineResult
     naive: BaselineResult
     no_storage: BaselineResult
+
+
+# ── Forecast Accuracy ───────────────────────────────────────
+
+class ForecastAccuracy(BaseModel):
+    train_mae: float = 0.0
+    train_rmse: float = 0.0
+    train_mape: float = 0.0

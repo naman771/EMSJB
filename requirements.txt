@@ -3,3 +3,6 @@ numpy
 matplotlib
 scikit-learn
 pulp
+fastapi
+uvicorn[standard]
+sqlalchemy

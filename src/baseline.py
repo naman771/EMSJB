@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from src.config import BATTERY_POWER, BATTERY_ENERGY, ETA, DEGR_COST
+from src.config import BATTERY_POWER, BATTERY_ENERGY, ETA, DEGR_COST, DEV_PENALTY
 
 
 def naive_strategy(df):
@@ -9,10 +9,12 @@ def naive_strategy(df):
     - Identify the 4 cheapest hours of each day → charge at max power
     - Identify the 4 most expensive hours of each day → discharge at max power
     - Idle otherwise
-    Returns a DataFrame with the same schema as simulation output.
+
+    Returns a DataFrame with the same schema as simulation output, including
+    revenue breakdown columns.
     """
     results = []
-    soc = 0.0
+    soc = 0.2 * BATTERY_ENERGY  # Start at min SOC like optimizer
 
     df = df.copy()
     df["date"] = df["Timestamp"].dt.date
@@ -28,26 +30,36 @@ def naive_strategy(df):
 
             if idx in cheap_indices and soc < BATTERY_ENERGY:
                 # Charge
-                q = -min(BATTERY_POWER, (BATTERY_ENERGY - soc) / ETA)
-                soc_next = soc - q * ETA
-            elif idx in expensive_indices and soc > 0:
+                q_charge = min(BATTERY_POWER, (BATTERY_ENERGY - soc) / ETA)
+                q = -q_charge  # Negative = buying/charging
+                soc_next = soc + ETA * q_charge
+            elif idx in expensive_indices and soc > 0.2 * BATTERY_ENERGY:
                 # Discharge
-                q = min(BATTERY_POWER, soc * ETA)
-                soc_next = soc - q / ETA
+                q_discharge = min(BATTERY_POWER, (soc - 0.2 * BATTERY_ENERGY) * ETA)
+                q = q_discharge  # Positive = selling/discharging
+                soc_next = soc - q_discharge / ETA
             else:
                 q = 0.0
                 soc_next = soc
 
-            soc_next = max(0, min(BATTERY_ENERGY, soc_next))
-            degr = DEGR_COST * abs(q)
-            profit = q * price - degr
+            soc_next = max(0.2 * BATTERY_ENERGY, min(BATTERY_ENERGY, soc_next))
+
+            abs_power = abs(q)
+            energy_revenue = q * price
+            degradation_cost = DEGR_COST * abs_power
+            deviation_penalty = DEV_PENALTY * abs_power
+            profit = energy_revenue - degradation_cost - deviation_penalty
 
             results.append({
                 "Timestamp": row["Timestamp"],
                 "Price": price,
+                "Forecast_Price": price,  # Naive uses actual prices
                 "Battery_Power": q,
                 "SOC": soc,
                 "Profit": profit,
+                "Energy_Revenue": energy_revenue,
+                "Degradation_Cost": degradation_cost,
+                "Deviation_Penalty": deviation_penalty,
             })
             soc = soc_next
 
@@ -65,8 +77,12 @@ def no_storage_baseline(df):
         results.append({
             "Timestamp": row["Timestamp"],
             "Price": row["Price_INR_kWh"],
+            "Forecast_Price": row["Price_INR_kWh"],
             "Battery_Power": 0.0,
             "SOC": 0.0,
             "Profit": 0.0,
+            "Energy_Revenue": 0.0,
+            "Degradation_Cost": 0.0,
+            "Deviation_Penalty": 0.0,
         })
     return pd.DataFrame(results)

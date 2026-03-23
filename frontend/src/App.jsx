@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import Plot from 'react-plotly.js'
-import { Activity, Battery, DollarSign, Zap, Play, Settings, Database, BarChart3, TrendingUp, RefreshCw } from 'lucide-react'
+import { Activity, Battery, DollarSign, Zap, Play, Settings, Database, BarChart3, TrendingUp, RefreshCw, Download, Target, Clock, PieChart } from 'lucide-react'
 import './App.css'
 
 const API = 'http://127.0.0.1:8000'
@@ -12,43 +12,48 @@ function App() {
   const [simulationData, setSimulationData] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [baseline, setBaseline] = useState(null)
+  const [forecastAcc, setForecastAcc] = useState(null)
   const [loading, setLoading] = useState(false)
   const [history, setHistory] = useState([])
   const [error, setError] = useState(null)
   const [steps, setSteps] = useState(168)
+  const [configEditing, setConfigEditing] = useState(false)
+  const [configDraft, setConfigDraft] = useState({})
 
-  // Fetch config, data summary, and history on mount
   useEffect(() => {
     fetchConfig()
     fetchDataSummary()
     fetchHistory()
+    fetchForecastAccuracy()
   }, [])
 
   const fetchConfig = async () => {
     try {
       const res = await axios.get(`${API}/api/config`)
       setConfig(res.data)
-    } catch (err) {
-      console.error("Error fetching config:", err)
-    }
+      setConfigDraft(res.data)
+    } catch (err) { console.error("Error fetching config:", err) }
   }
 
   const fetchDataSummary = async () => {
     try {
       const res = await axios.get(`${API}/api/data/summary`)
       setDataSummary(res.data)
-    } catch (err) {
-      console.error("Error fetching data summary:", err)
-    }
+    } catch (err) { console.error("Error fetching data summary:", err) }
   }
 
   const fetchHistory = async () => {
     try {
       const res = await axios.get(`${API}/api/simulation/history`)
       setHistory(res.data)
-    } catch (err) {
-      console.error("Error fetching history:", err)
-    }
+    } catch (err) { console.error("Error fetching history:", err) }
+  }
+
+  const fetchForecastAccuracy = async () => {
+    try {
+      const res = await axios.get(`${API}/api/forecast/accuracy`)
+      setForecastAcc(res.data)
+    } catch (err) { console.error("Error fetching forecast accuracy:", err) }
   }
 
   const runSimulation = async () => {
@@ -57,7 +62,6 @@ function App() {
     try {
       const res = await axios.get(`${API}/api/simulation/run?steps=${steps}`)
       setSimulationData(res.data)
-      // Fetch metrics and baseline for this run
       const [metricsRes, baselineRes] = await Promise.all([
         axios.get(`${API}/api/simulation/${res.data.id}/metrics`),
         axios.get(`${API}/api/simulation/${res.data.id}/baseline`),
@@ -91,9 +95,80 @@ function App() {
     setLoading(false)
   }
 
-  // Helper: format INR
+  const exportCSV = async (runId) => {
+    try {
+      const res = await axios.get(`${API}/api/simulation/${runId}/export`, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `simulation_run_${runId}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error("Export failed:", err)
+    }
+  }
+
+  const saveConfig = async () => {
+    try {
+      const res = await axios.post(`${API}/api/config`, {
+        battery_power_kw: configDraft.battery_power_kw,
+        battery_energy_kwh: configDraft.battery_energy_kwh,
+        round_trip_efficiency: configDraft.round_trip_efficiency,
+        cycle_life: configDraft.cycle_life,
+        cvar_alpha: configDraft.cvar_alpha,
+        cvar_lambda: configDraft.cvar_lambda,
+        planning_horizon_hours: configDraft.planning_horizon_hours,
+        scenarios: configDraft.scenarios,
+      })
+      setConfig(res.data)
+      setConfigEditing(false)
+    } catch (err) {
+      console.error("Error saving config:", err)
+    }
+  }
+
   const inr = (v) => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })
   const pct = (v) => (v * 100).toFixed(1) + '%'
+
+  // Build hourly profit heatmap data (day-of-week × hour-of-day)
+  const buildHeatmapData = () => {
+    if (!simulationData || !simulationData.steps || simulationData.steps.length === 0) return null
+
+    const grid = Array.from({ length: 7 }, () => Array(24).fill(null))
+    const counts = Array.from({ length: 7 }, () => Array(24).fill(0))
+
+    simulationData.steps.forEach((s, i) => {
+      const hour = i % 24
+      const day = Math.floor(i / 24) % 7
+      if (grid[day][hour] === null) grid[day][hour] = 0
+      grid[day][hour] += s.profit
+      counts[day][hour] += 1
+    })
+
+    // Average profit per cell
+    for (let d = 0; d < 7; d++) {
+      for (let h = 0; h < 24; h++) {
+        if (counts[d][h] > 0) grid[d][h] = grid[d][h] / counts[d][h]
+      }
+    }
+
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    return {
+      z: grid,
+      x: Array.from({ length: 24 }, (_, i) => `${i}:00`),
+      y: dayLabels,
+      type: 'heatmap',
+      colorscale: [
+        [0, '#ef4444'],
+        [0.5, '#fafbfc'],
+        [1, '#10b981'],
+      ],
+      hoverongaps: false,
+    }
+  }
 
   return (
     <div className="dashboard-container">
@@ -104,6 +179,12 @@ function App() {
           <h1>EMSJB Energy Dashboard</h1>
         </div>
         <div className="header-right">
+          {forecastAcc && (
+            <div className="forecast-badge">
+              <Target size={14} />
+              MAE: ₹{forecastAcc.train_mae} | RMSE: ₹{forecastAcc.train_rmse}
+            </div>
+          )}
           <div className="status-badge">
             <span className="status-dot"></span>
             System Online
@@ -125,6 +206,11 @@ function App() {
           <button className="btn-primary" onClick={runSimulation} disabled={loading}>
             {loading ? <><RefreshCw size={16} className="spinner-inline" /> Running...</> : <><Play size={16} /> Run Simulation</>}
           </button>
+          {simulationData && (
+            <button className="btn-export" onClick={() => exportCSV(simulationData.id)}>
+              <Download size={16} /> Export CSV
+            </button>
+          )}
         </div>
 
         {error && <div className="error-toast">⚠ {error}</div>}
@@ -137,8 +223,47 @@ function App() {
             <div className="info-card-header">
               <div className="info-card-icon blue"><Settings size={18} /></div>
               <h2>Battery Configuration</h2>
+              <button className="btn-mini" onClick={() => { setConfigEditing(!configEditing); setConfigDraft(config) }}>
+                {configEditing ? 'Cancel' : 'Edit'}
+              </button>
             </div>
-            {config ? (
+            {configEditing ? (
+              <div className="config-editor">
+                <div className="config-field">
+                  <label>Power (kW)</label>
+                  <input type="number" value={configDraft.battery_power_kw || ''} onChange={e => setConfigDraft({ ...configDraft, battery_power_kw: parseFloat(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>Energy (kWh)</label>
+                  <input type="number" value={configDraft.battery_energy_kwh || ''} onChange={e => setConfigDraft({ ...configDraft, battery_energy_kwh: parseFloat(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>Round-trip Eff.</label>
+                  <input type="number" step="0.01" min="0" max="1" value={configDraft.round_trip_efficiency || ''} onChange={e => setConfigDraft({ ...configDraft, round_trip_efficiency: parseFloat(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>Cycle Life</label>
+                  <input type="number" value={configDraft.cycle_life || ''} onChange={e => setConfigDraft({ ...configDraft, cycle_life: parseInt(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>CVaR α</label>
+                  <input type="number" step="0.01" min="0" max="1" value={configDraft.cvar_alpha || ''} onChange={e => setConfigDraft({ ...configDraft, cvar_alpha: parseFloat(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>CVaR λ (risk weight)</label>
+                  <input type="number" step="0.05" min="0" max="1" value={configDraft.cvar_lambda || ''} onChange={e => setConfigDraft({ ...configDraft, cvar_lambda: parseFloat(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>Horizon (hours)</label>
+                  <input type="number" value={configDraft.planning_horizon_hours || ''} onChange={e => setConfigDraft({ ...configDraft, planning_horizon_hours: parseInt(e.target.value) })} />
+                </div>
+                <div className="config-field">
+                  <label>Scenarios</label>
+                  <input type="number" value={configDraft.scenarios || ''} onChange={e => setConfigDraft({ ...configDraft, scenarios: parseInt(e.target.value) })} />
+                </div>
+                <button className="btn-save" onClick={saveConfig}>Save & Apply</button>
+              </div>
+            ) : config ? (
               <div className="info-grid-inner">
                 <div className="info-item"><span className="label">Power Rating</span><span className="value">{config.battery_power_kw.toLocaleString()} kW</span></div>
                 <div className="info-item"><span className="label">Energy Capacity</span><span className="value">{config.battery_energy_kwh.toLocaleString()} kWh</span></div>
@@ -146,8 +271,8 @@ function App() {
                 <div className="info-item"><span className="label">Cycle Life</span><span className="value">{config.cycle_life.toLocaleString()}</span></div>
                 <div className="info-item"><span className="label">CAPEX</span><span className="value">{inr(config.capex_inr)}</span></div>
                 <div className="info-item"><span className="label">OPEX / Year</span><span className="value">{inr(config.opex_per_year_inr)}</span></div>
-                <div className="info-item"><span className="label">Forecast Lag</span><span className="value">{config.forecast_lag_hours}h</span></div>
                 <div className="info-item"><span className="label">CVaR α</span><span className="value">{config.cvar_alpha}</span></div>
+                <div className="info-item"><span className="label">CVaR λ</span><span className="value">{config.cvar_lambda}</span></div>
               </div>
             ) : <p style={{color: 'var(--text-muted)', fontSize: '0.85rem'}}>Loading...</p>}
           </div>
@@ -166,6 +291,9 @@ function App() {
                 <div className="info-item"><span className="label">Std Dev</span><span className="value">₹{dataSummary.price_std}/kWh</span></div>
                 <div className="info-item"><span className="label">Min Price</span><span className="value">₹{dataSummary.price_min}/kWh</span></div>
                 <div className="info-item"><span className="label">Max Price</span><span className="value">₹{dataSummary.price_max}/kWh</span></div>
+                {forecastAcc && <>
+                  <div className="info-item"><span className="label">Forecast MAPE</span><span className="value">{forecastAcc.train_mape}%</span></div>
+                </>}
               </div>
             ) : <p style={{color: 'var(--text-muted)', fontSize: '0.85rem'}}>Loading...</p>}
           </div>
@@ -216,6 +344,22 @@ function App() {
                   <p className="kpi-sub">active hours</p>
                 </div>
               </div>
+              <div className="kpi-card">
+                <div className="kpi-icon payback"><Clock size={22} /></div>
+                <div className="kpi-content">
+                  <h3>Payback Period</h3>
+                  <p className="kpi-value">{metrics.payback_years === Infinity || metrics.payback_years > 99 ? '—' : metrics.payback_years.toFixed(1) + ' yrs'}</p>
+                  <p className="kpi-sub">CAPEX recovery</p>
+                </div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-icon roi"><PieChart size={22} /></div>
+                <div className="kpi-content">
+                  <h3>Annual ROI</h3>
+                  <p className="kpi-value">{metrics.roi_annual_pct.toFixed(1)}%</p>
+                  <p className="kpi-sub">return on investment</p>
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -234,8 +378,15 @@ function App() {
                       x: simulationData.steps.map(s => s.step_index),
                       y: simulationData.steps.map(s => s.price),
                       type: 'scatter', mode: 'lines',
-                      name: 'Price (₹/kWh)',
+                      name: 'Actual Price (₹/kWh)',
                       line: { color: '#3b82f6', width: 1.5 }
+                    },
+                    {
+                      x: simulationData.steps.map(s => s.step_index),
+                      y: simulationData.steps.map(s => s.forecast_price),
+                      type: 'scatter', mode: 'lines',
+                      name: 'Forecast Price',
+                      line: { color: '#f59e0b', width: 1.5, dash: 'dash' }
                     },
                     {
                       x: simulationData.steps.map(s => s.step_index),
@@ -264,8 +415,7 @@ function App() {
                     yaxis2: { title: 'Power (kW) / SOC (kWh)', overlaying: 'y', side: 'right', gridcolor: '#f1f5f9' },
                     legend: { orientation: 'h', y: 1.12 },
                     margin: { l: 55, r: 55, t: 20, b: 45 },
-                    plot_bgcolor: '#fafbfc',
-                    paper_bgcolor: 'transparent',
+                    plot_bgcolor: '#fafbfc', paper_bgcolor: 'transparent',
                     font: { family: 'Inter', size: 12 },
                   }}
                   useResizeHandler={true}
@@ -305,6 +455,61 @@ function App() {
                 />
               </div>
 
+              {/* Revenue Breakdown */}
+              {metrics && (
+                <div className="chart-card">
+                  <h2>Revenue Breakdown</h2>
+                  <Plot
+                    data={[{
+                      values: [
+                        Math.abs(metrics.total_energy_revenue || 0),
+                        Math.abs(metrics.total_degradation_cost || 0),
+                        Math.abs(metrics.total_deviation_penalty || 0),
+                      ],
+                      labels: ['Energy Revenue', 'Degradation Cost', 'Deviation Penalty'],
+                      type: 'pie',
+                      hole: 0.45,
+                      marker: {
+                        colors: ['#10b981', '#ef4444', '#f59e0b']
+                      },
+                      textinfo: 'label+percent',
+                      textposition: 'outside',
+                    }]}
+                    layout={{
+                      autosize: true, height: 300,
+                      margin: { l: 20, r: 20, t: 10, b: 10 },
+                      paper_bgcolor: 'transparent',
+                      font: { family: 'Inter', size: 11 },
+                      showlegend: false,
+                    }}
+                    useResizeHandler={true}
+                    style={{ width: "100%", height: "100%" }}
+                    config={{ displayModeBar: false }}
+                  />
+                </div>
+              )}
+
+              {/* Hourly Profit Heatmap */}
+              {buildHeatmapData() && (
+                <div className="chart-card full-width">
+                  <h2>Profit Heatmap (Day × Hour)</h2>
+                  <Plot
+                    data={[buildHeatmapData()]}
+                    layout={{
+                      autosize: true, height: 280,
+                      xaxis: { title: 'Hour of Day', dtick: 1 },
+                      yaxis: { title: '' },
+                      margin: { l: 60, r: 20, t: 10, b: 50 },
+                      plot_bgcolor: '#fafbfc', paper_bgcolor: 'transparent',
+                      font: { family: 'Inter', size: 11 },
+                    }}
+                    useResizeHandler={true}
+                    style={{ width: "100%", height: "100%" }}
+                    config={{ displayModeBar: false }}
+                  />
+                </div>
+              )}
+
               {/* SOC Distribution */}
               <div className="chart-card">
                 <h2>SOC Distribution</h2>
@@ -319,6 +524,32 @@ function App() {
                   layout={{
                     autosize: true, height: 300,
                     xaxis: { title: 'SOC (kWh)', gridcolor: '#f1f5f9' },
+                    yaxis: { title: 'Frequency', gridcolor: '#f1f5f9' },
+                    margin: { l: 55, r: 20, t: 10, b: 45 },
+                    plot_bgcolor: '#fafbfc', paper_bgcolor: 'transparent',
+                    font: { family: 'Inter', size: 12 },
+                    bargap: 0.05,
+                  }}
+                  useResizeHandler={true}
+                  style={{ width: "100%", height: "100%" }}
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+
+              {/* Forecast Error Distribution */}
+              <div className="chart-card">
+                <h2>Forecast Error Distribution</h2>
+                <Plot
+                  data={[{
+                    x: simulationData.steps.map(s => (s.price - (s.forecast_price || s.price))),
+                    type: 'histogram',
+                    name: 'Error',
+                    marker: { color: '#f59e0b' },
+                    nbinsx: 40,
+                  }]}
+                  layout={{
+                    autosize: true, height: 300,
+                    xaxis: { title: 'Price Error (₹/kWh)', gridcolor: '#f1f5f9' },
                     yaxis: { title: 'Frequency', gridcolor: '#f1f5f9' },
                     margin: { l: 55, r: 20, t: 10, b: 45 },
                     plot_bgcolor: '#fafbfc', paper_bgcolor: 'transparent',
@@ -381,6 +612,15 @@ function App() {
                   <tr><td>Max Drawdown</td><td>{inr(metrics.max_drawdown)}</td><td>Worst peak-to-trough cumulative loss</td></tr>
                   <tr><td>Sharpe Ratio</td><td>{metrics.sharpe_ratio.toFixed(4)}</td><td>Annualised risk-adjusted return (higher is better)</td></tr>
                   <tr><td>Utilization Rate</td><td>{pct(metrics.utilization_rate)}</td><td>Fraction of hours the battery was active</td></tr>
+                  <tr><td>Payback Period</td><td>{metrics.payback_years > 99 ? '∞' : metrics.payback_years.toFixed(1) + ' years'}</td><td>Estimated time to recover CAPEX</td></tr>
+                  <tr><td>Annual ROI</td><td>{metrics.roi_annual_pct.toFixed(1)}%</td><td>Annualised return on capital investment</td></tr>
+                  <tr className="metric-category"><td colSpan={3}>Revenue Breakdown</td></tr>
+                  <tr><td>Energy Revenue</td><td>{inr(metrics.total_energy_revenue)}</td><td>Gross revenue from buying low / selling high</td></tr>
+                  <tr><td>Degradation Cost</td><td>{inr(metrics.total_degradation_cost)}</td><td>Battery wear cost from cycling</td></tr>
+                  <tr><td>Deviation Penalty</td><td>{inr(metrics.total_deviation_penalty)}</td><td>Grid schedule deviation charges</td></tr>
+                  <tr className="metric-category"><td colSpan={3}>Forecast Quality</td></tr>
+                  <tr><td>Forecast MAE</td><td>₹{metrics.forecast_mae}/kWh</td><td>Mean absolute forecast error</td></tr>
+                  <tr><td>Forecast RMSE</td><td>₹{metrics.forecast_rmse}/kWh</td><td>Root mean square forecast error</td></tr>
                 </tbody>
               </table>
             </div>
@@ -409,8 +649,11 @@ function App() {
                     <td className={run.total_profit >= 0 ? 'profit-positive' : 'profit-negative'}>
                       {inr(run.total_profit)}
                     </td>
-                    <td>{run.steps?.length || '—'}</td>
-                    <td><button className="btn-view" onClick={() => loadRun(run.id)}>View</button></td>
+                    <td>{run.steps_count || run.steps?.length || '—'}</td>
+                    <td>
+                      <button className="btn-view" onClick={() => loadRun(run.id)}>View</button>
+                      <button className="btn-export-sm" onClick={() => exportCSV(run.id)}>CSV</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
